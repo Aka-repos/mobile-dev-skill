@@ -160,8 +160,142 @@ dependencies {
 }
 ```
 
+## Route-Screen pattern (Compose)
+```kotlin
+// Route: owns ViewModel + navigation callbacks — never passes viewModel down
+@Composable
+fun HomeRoute(
+    onArticleClick: (String) -> Unit,
+    viewModel: HomeViewModel = hiltViewModel()
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    HomeScreen(uiState = uiState, onArticleClick = onArticleClick)
+}
+
+// Screen: pure UI, no ViewModel, fully previewable
+@Composable
+fun HomeScreen(
+    uiState: HomeUiState,
+    onArticleClick: (String) -> Unit
+) {
+    when (uiState) {
+        is HomeUiState.Loading -> CircularProgressIndicator()
+        is HomeUiState.Success -> ArticleList(uiState.articles, onArticleClick)
+        is HomeUiState.Error -> ErrorMessage(uiState.message)
+    }
+}
+```
+
+## Type-safe Navigation (Navigation 2.8+)
+```kotlin
+// Define routes as serializable objects/classes
+@Serializable object HomeRoute
+@Serializable data class ArticleRoute(val id: String)
+
+// NavGraph extension
+fun NavGraphBuilder.homeGraph(onArticleClick: (String) -> Unit) {
+    composable<HomeRoute> { HomeRoute(onArticleClick) }
+    composable<ArticleRoute> { backStack ->
+        val route: ArticleRoute = backStack.toRoute()
+        ArticleRoute(articleId = route.id)
+    }
+}
+
+// Navigate type-safely
+navController.navigate(ArticleRoute(id = article.id))
+```
+
+## Offline-first (Room as source of truth)
+```kotlin
+// Repository always reads from Room; syncs from network in background
+class OfflineFirstArticleRepository @Inject constructor(
+    private val dao: ArticleDao,
+    private val api: ArticleApi,
+    private val workManager: WorkManager
+) : ArticleRepository {
+
+    override fun getArticles(): Flow<List<Article>> = dao.getAll().map { it.map(ArticleEntity::toDomain) }
+
+    override suspend fun sync() {
+        val dtos = api.getArticles()
+        dao.upsertAll(dtos.map(ArticleDto::toEntity))
+    }
+}
+
+// Periodic sync via WorkManager
+class SyncWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): Result {
+        return try {
+            articleRepository.sync()
+            Result.success()
+        } catch (e: Exception) {
+            Result.retry()
+        }
+    }
+}
+```
+
+## Adaptive layouts (WindowSizeClass)
+```kotlin
+@Composable
+fun AppScaffold(windowSizeClass: WindowSizeClass) {
+    val useNavRail = windowSizeClass.widthSizeClass >= WindowWidthSizeClass.Medium
+    if (useNavRail) {
+        Row {
+            AppNavRail(destinations = topLevelDestinations)
+            AppNavHost(modifier = Modifier.weight(1f))
+        }
+    } else {
+        Scaffold(bottomBar = { AppBottomBar(destinations = topLevelDestinations) }) { padding ->
+            AppNavHost(modifier = Modifier.padding(padding))
+        }
+    }
+}
+```
+
+## Multi-module structure (quick reference)
+```
+app/
+feature/
+  :home:api      # Public interfaces/models only — no impl details
+  :home:impl     # Implementation, depends on :home:api + core:*
+core/
+  :data          # Repository implementations
+  :database      # Room setup, DAOs, entities
+  :network       # Retrofit, DTOs
+  :model         # Pure domain models — no dependencies
+  :ui            # Shared composables, theme
+  :testing       # Test doubles, TestDispatcherRule
+```
+**Dependency rule**: `feature:impl` → `feature:api` + `core:*` only. Never `feature → feature`.
+
+## Testing with test doubles (no mocking libraries)
+```kotlin
+// Implement the same interface your production code uses
+class TestArticleRepository : ArticleRepository {
+    private val articles = MutableStateFlow<List<Article>>(emptyList())
+    fun emit(items: List<Article>) { articles.value = items }
+    override fun getArticles(): Flow<List<Article>> = articles
+    override suspend fun sync() { /* no-op in tests */ }
+}
+
+// ViewModel test with Turbine + TestDispatcherRule
+@Test
+fun `loading state emitted then success`() = runTest {
+    val repo = TestArticleRepository()
+    val vm = HomeViewModel(repo)
+    repo.emit(listOf(Article("1", "Title")))
+    vm.uiState.test {
+        assertIs<HomeUiState.Loading>(awaitItem())
+        assertIs<HomeUiState.Success>(awaitItem())
+    }
+}
+```
+
 ## Common pitfalls
 - Always use `lifecycleScope` / `viewModelScope` — never `GlobalScope`
 - Collect flows with `repeatOnLifecycle(STARTED)` to avoid leaks when app is backgrounded
 - Room queries must run on a background thread (Room's Kotlin extensions handle this with `suspend`)
 - Don't reference `Activity` or `Fragment` from `ViewModel` — causes memory leaks
+- Route-Screen split: never pass `ViewModel` as a parameter to a Screen composable
+- Multi-module: don't create `:feature:impl → :feature:impl` cross-dependencies

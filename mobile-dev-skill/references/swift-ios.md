@@ -1,5 +1,7 @@
 # Swift / iOS Reference
 
+> **Platform targets**: Swift 5.9+, Xcode 15+, iOS 15.0+, macOS 12.0+, watchOS 8.0+, tvOS 15.0+, visionOS 1.0+
+
 ## Project Structure (MVVM + SwiftUI)
 
 ```
@@ -162,12 +164,67 @@ struct Keychain {
 }
 ```
 
+## Swift Concurrency — Actors and structured concurrency
+```swift
+// Actor: serializes access to mutable state, eliminates data races
+actor TokenStore {
+    private var token: String?
+    func set(_ value: String) { token = value }
+    func get() -> String? { token }
+}
+
+// Parallel independent work with async let
+func loadDashboard() async throws -> Dashboard {
+    async let user = api.getUser()
+    async let feed = api.getFeed()
+    return Dashboard(user: try await user, feed: try await feed)
+}
+
+// TaskGroup for dynamic parallelism
+func fetchAll(ids: [String]) async throws -> [Article] {
+    try await withThrowingTaskGroup(of: Article.self) { group in
+        for id in ids { group.addTask { try await api.getArticle(id: id) } }
+        return try await group.reduce(into: []) { $0.append($1) }
+    }
+}
+```
+
+## App Store submission checklist (iOS)
+Scan for these before submitting to avoid common rejections:
+
+**Metadata (Guideline 2.3)**
+- No competitor names in any metadata field: Android, Google Play, Samsung, APK, sideload
+- No misleading capability claims
+- Screenshots must match the actual app UI
+
+**Privacy (Guideline 5.1)**
+- Add `PrivacyInfo.xcprivacy` manifest — required for all apps and any SDK that accesses:
+  `NSUserDefaults`, `File timestamp`, `System boot time`, `Disk space`, `Active keyboard`, `Device fingerprinting`
+- Firebase, Amplitude, and most analytics SDKs require a privacy manifest transitively
+- Include `NSPrivacyAccessedAPITypes` entries for each API your app (or its SDKs) uses
+
+**Subscriptions (Guideline 3.1.2)**
+- Terms of Service and Privacy Policy URLs must appear in BOTH the app description AND every IAP screen
+- Free trial must be clearly labeled with duration and renewal price
+
+**Entitlements**
+- Remove any entitlements you don't actively use — unused entitlements trigger rejection
+
+**Sign in with Apple (Guideline 4.8)**
+- Required if your app offers any other third-party login (Google, Facebook, etc.)
+
+**China storefront**
+- Bans on certain terms apply globally across all locales — one banned term blocks the entire submission
+- AI app terms to avoid in metadata if distributing in China: ChatGPT, GPT, Gemini, Claude, Anthropic, Midjourney, DALL-E → use generic "AI-powered" language
+
 ## Common pitfalls
 - **Retain cycles**: always use `[weak self]` in closures that capture self
 - **Force unwrapping**: avoid `!` — use `guard let` or `if let`
 - **UI on main thread**: any `@Published` mutation must happen on `@MainActor` (or `DispatchQueue.main.async`)
 - **Combine vs async/await**: prefer `async/await` for new code, Combine when working with existing reactive chains
 - **@StateObject vs @ObservedObject**: use `@StateObject` for objects the view owns, `@ObservedObject` for injected ones
+- **Actor reentrancy**: `await` inside an actor can interleave — re-check state after every await
+- **Privacy manifest**: missing `PrivacyInfo.xcprivacy` for SDK APIs causes App Store rejection since Spring 2024
 
 ## Key packages (Swift Package Manager)
 ```
