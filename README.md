@@ -106,4 +106,3 @@ PRs welcome. If you want to improve a platform reference or add a new section (t
 
 ---
 
-Made with Claude Code · [Aka-repos](https://github.com/Aka-repos)
